@@ -1,0 +1,147 @@
+import streamlit as st
+import pandas as pd
+from itertools import product
+from collections import Counter
+
+st.set_page_config(page_title="Lowest Payout Combination", layout="wide")
+
+st.title("🎯 Lowest Payout Combination Finder")
+st.write("Upload your Excel file to calculate the lowest payout 5-digit combination.")
+
+# ============================================
+# 📂 FILE UPLOAD
+# ============================================
+uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
+
+if uploaded_file:
+    df = pd.read_excel(uploaded_file)
+    df = df.iloc[:, [0, 1]]
+    df.columns = ["ticket", "category"]
+
+    df = df.dropna(subset=["ticket", "category"])
+    df["category"] = df["category"].astype(str).str.strip().str.lower()
+
+    st.subheader("📊 Data Preview")
+    st.dataframe(df.head())
+    st.write("Total tickets:", len(df))
+
+    # ============================================
+    # 🧹 PREPROCESS TICKETS
+    # ============================================
+    tickets = []
+    for _, row in df.iterrows():
+        digits = tuple(map(int, str(row["ticket"]).split(",")))
+        tickets.append({
+            "digits": digits,
+            "counter": Counter(digits),
+            "category": row["category"]
+        })
+
+    # ============================================
+    # 💰 PAYOUT TABLES
+    # ============================================
+    STRAIGHT_PAYOUT = {5: 45000}
+    RUMBLE_PAYOUT   = {3: 5, 4: 120, 5: 1850}
+    CHANCE_PAYOUT   = {1: 15, 2: 100, 3: 1250, 4: 8500, 5: 13500}
+
+    # ============================================
+    # 🔢 MATCH FUNCTIONS
+    # ============================================
+    def straight_match(combo, ticket):
+        count = 0
+        for i in range(5):
+            if combo[i] == ticket[i]:
+                count += 1
+            else:
+                break
+        return count
+
+    def chance_match(combo, ticket):
+        count = 0
+        for i in range(1, 6):
+            if combo[-i] == ticket[-i]:
+                count += 1
+            else:
+                break
+        return count
+
+    def rumble_match(combo_counter, ticket_counter):
+        return sum((combo_counter & ticket_counter).values())
+
+    # ============================================
+    # ▶️ RUN BUTTON
+    # ============================================
+    if st.button("🚀 Calculate Lowest Payout"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        best_combo = None
+        lowest_payout = float("inf")
+        best_breakdown = None
+
+        total_combos = 100000
+
+        for idx, combo in enumerate(product(range(10), repeat=5)):
+            combo_counter = Counter(combo)
+
+            straight_total = 0
+            rumble_total = 0
+            chance_total = 0
+
+            for t in tickets:
+                if t["category"] == "straight":
+                    m = straight_match(combo, t["digits"])
+                    straight_total += STRAIGHT_PAYOUT.get(m, 0)
+
+                elif t["category"] == "rumble":
+                    m = rumble_match(combo_counter, t["counter"])
+                    rumble_total += RUMBLE_PAYOUT.get(m, 0)
+
+                elif t["category"] == "chance":
+                    m = chance_match(combo, t["digits"])
+                    chance_total += CHANCE_PAYOUT.get(m, 0)
+
+                if straight_total + rumble_total + chance_total >= lowest_payout:
+                    break
+
+            total_payout = straight_total + rumble_total + chance_total
+
+            if total_payout < lowest_payout:
+                lowest_payout = total_payout
+                best_combo = combo
+                best_breakdown = {
+                    "Straight": straight_total,
+                    "Rumble": rumble_total,
+                    "Chance": chance_total
+                }
+
+            if idx % 1000 == 0:
+                progress_bar.progress(idx / total_combos)
+                status_text.text(f"Processing combination {idx:,} / {total_combos:,}")
+
+        progress_bar.progress(1.0)
+        status_text.text("Completed ✔")
+
+        # ============================================
+        # 📊 RESULT
+        # ============================================
+        result_df = pd.DataFrame([{
+            "Best Combination": ",".join(map(str, best_combo)),
+            "Total Payout": lowest_payout,
+            "Straight Payout": best_breakdown["Straight"],
+            "Rumble Payout": best_breakdown["Rumble"],
+            "Chance Payout": best_breakdown["Chance"]
+        }])
+
+        st.subheader("🏆 Lowest Payout Result")
+        st.dataframe(result_df)
+
+        # ============================================
+        # 📁 DOWNLOAD
+        # ============================================
+        st.download_button(
+            label="📥 Download Result (Excel)",
+            data=result_df.to_excel(index=False, engine="openpyxl"),
+            file_name="lowest_payout_result.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
